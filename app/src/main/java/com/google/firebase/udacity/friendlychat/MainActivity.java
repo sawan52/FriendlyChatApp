@@ -21,9 +21,11 @@ import android.os.Bundle;
 import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
 import android.support.v7.app.AppCompatActivity;
+import android.support.v7.widget.Toolbar;
 import android.text.Editable;
 import android.text.InputFilter;
 import android.text.TextWatcher;
+import android.util.Log;
 import android.view.Menu;
 import android.view.MenuInflater;
 import android.view.MenuItem;
@@ -33,11 +35,13 @@ import android.widget.EditText;
 import android.widget.ImageButton;
 import android.widget.ListView;
 import android.widget.ProgressBar;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import com.firebase.ui.auth.AuthUI;
 import com.google.android.gms.tasks.Continuation;
 import com.google.android.gms.tasks.OnCompleteListener;
+import com.google.android.gms.tasks.OnFailureListener;
 import com.google.android.gms.tasks.OnSuccessListener;
 import com.google.android.gms.tasks.Task;
 import com.google.firebase.auth.FirebaseAuth;
@@ -47,14 +51,17 @@ import com.google.firebase.database.DataSnapshot;
 import com.google.firebase.database.DatabaseError;
 import com.google.firebase.database.DatabaseReference;
 import com.google.firebase.database.FirebaseDatabase;
+import com.google.firebase.remoteconfig.FirebaseRemoteConfig;
+import com.google.firebase.remoteconfig.FirebaseRemoteConfigSettings;
 import com.google.firebase.storage.FirebaseStorage;
 import com.google.firebase.storage.StorageReference;
 import com.google.firebase.storage.UploadTask;
 
-import java.security.PrivateKey;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -62,6 +69,8 @@ public class MainActivity extends AppCompatActivity {
     public static final int DEFAULT_MSG_LENGTH_LIMIT = 1000;
     public static final int RC_SIGN_IN = 1;
     private static final int RC_PHOTO_PICKER = 2;
+    public static final String FRIENDLY_MSG_LENGTH_KEY = "friendly_msg_length";
+
     private static final String TAG = "MainActivity";
     private ListView mMessageListView;
     private MessageAdapter mMessageAdapter;
@@ -69,7 +78,8 @@ public class MainActivity extends AppCompatActivity {
     private ImageButton mPhotoPickerButton;
     private EditText mMessageEditText;
     private Button mSendButton;
-    String downloadUrl;
+    private String downloadUrl;
+    private TextView mUserNameOnToolbar;
 
     private String mUsername;
     private FirebaseDatabase mFirebaseDatabase;
@@ -79,21 +89,28 @@ public class MainActivity extends AppCompatActivity {
     private FirebaseAuth.AuthStateListener mAuthStateListener;
     private FirebaseStorage mFirebaseStorage;
     private StorageReference mChatPhotosStorageReference;
+    private FirebaseRemoteConfig mFirebaseRemoteConfig;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
+        Toolbar toolbar = findViewById(R.id.toolbar);
+        setSupportActionBar(toolbar);
+        setTitle(null);
+
         mUsername = ANONYMOUS;
 
         mFirebaseDatabase = FirebaseDatabase.getInstance();
         mFirebaseAuth = FirebaseAuth.getInstance();
         mFirebaseStorage = FirebaseStorage.getInstance();
+        mFirebaseRemoteConfig = FirebaseRemoteConfig.getInstance();
         mMessagesDatabaseReference = mFirebaseDatabase.getReference().child("messages");
         mChatPhotosStorageReference = mFirebaseStorage.getReference().child("chat_photos");
 
         // Initialize references to views
+        mUserNameOnToolbar = findViewById(R.id.userName);
         mProgressBar = (ProgressBar) findViewById(R.id.progressBar);
         mMessageListView = (ListView) findViewById(R.id.messageListView);
         mPhotoPickerButton = (ImageButton) findViewById(R.id.photoPickerButton);
@@ -107,6 +124,7 @@ public class MainActivity extends AppCompatActivity {
 
         // Initialize progress bar
         mProgressBar.setVisibility(ProgressBar.INVISIBLE);
+//        mUserNameOnToolbar.setText(mUsername);
 
         // ImagePickerButton shows an image picker to upload a image for a message
         mPhotoPickerButton.setOnClickListener(new View.OnClickListener() {
@@ -176,6 +194,42 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
         };
+
+        FirebaseRemoteConfigSettings configSettings = new FirebaseRemoteConfigSettings.Builder().setDeveloperModeEnabled(BuildConfig.DEBUG).build();
+        mFirebaseRemoteConfig.setConfigSettings(configSettings);
+
+        Map<String, Object> defaultConfigMap = new HashMap<>();
+        defaultConfigMap.put(FRIENDLY_MSG_LENGTH_KEY, DEFAULT_MSG_LENGTH_LIMIT);
+        mFirebaseRemoteConfig.setDefaults(defaultConfigMap);
+        fetchConfig();
+    }
+
+    private void fetchConfig() {
+        long cacheExpiration = 3600;
+
+        if (mFirebaseRemoteConfig.getInfo().getConfigSettings().isDeveloperModeEnabled()){
+            cacheExpiration = 0;
+        }
+        mFirebaseRemoteConfig.fetch(cacheExpiration).addOnSuccessListener(new OnSuccessListener<Void>() {
+            @Override
+            public void onSuccess(Void aVoid) {
+                mFirebaseRemoteConfig.activateFetched();
+                applyRetrievedLengthLimit();
+            }
+        }).addOnFailureListener(new OnFailureListener() {
+            @Override
+            public void onFailure(@NonNull Exception e) {
+                Log.w(TAG, "Error fetching config", e);
+                applyRetrievedLengthLimit();
+            }
+        });
+    }
+
+    private void applyRetrievedLengthLimit() {
+        Long friendly_msg_length = mFirebaseRemoteConfig.getLong(FRIENDLY_MSG_LENGTH_KEY);
+        mMessageEditText.setFilters(new InputFilter[]{new InputFilter.LengthFilter(friendly_msg_length.intValue()) {
+        }});
+        Log.d(TAG, FRIENDLY_MSG_LENGTH_KEY + "=" + friendly_msg_length);
     }
 
     private void onSignedOutCleanup() {
@@ -193,6 +247,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void onSignedInInitializer(String displayName) {
         mUsername = displayName;
+        mUserNameOnToolbar.setText(mUsername);
         attachDatabaseReadListener();
     }
 
